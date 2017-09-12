@@ -1,0 +1,165 @@
+#---------------------------------------------------------------------------
+# Copyright host-telecom s.r.o 2017, 2017 All Rights Reserved
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# Limitations under the License.
+#---------------------------------------------------------------------------
+# Written By Anton Porabkovich (anton@atlex.ru)
+---
+- name: Find and read ALL device informations
+  shell: parted -sm -l|grep -v "BYT\|/dev/md\|^$"|grep "/dev/"|cut -d":" -f1|while read DEVICENAME; do parted -sm $DEVICENAME print|grep -v "BYT\|$DEVICENAME"| awk -F":" '{print $1, $6}' |while read PARTNUM PARTNAME; do if [ ${{'{'}}#PARTNAME{{'}'}} -gt "0" ]; then if [ "`echo $DEVICENAME|grep nvme|wc -l`" -eq "0" ]; then PARTPREFIX=""; DEVICESERIAL="`smartctl -a $DEVICENAME |egrep "Serial Number:|Serial number:"|cut -d":" -f2|sed -e 's/^[ \t]*//'`"; PARTDEVNAME="`echo \"$DEVICENAME\"|cut -d"/" -f3`$PARTNUM"; else PARTPREFIX="p"; DEVICESERIAL="`nvme list|grep $DEVICENAME|awk '{print $2}'`"; PARTDEVNAME="`echo \"$DEVICENAME\"|cut -d"/" -f3`p$PARTNUM"; fi; echo "$DEVICENAME:$PARTNUM:$PARTPREFIX$PARTNUM:$DEVICENAME$PARTPREFIX$PARTNUM:$DEVICESERIAL:$PARTNAME:$PARTDEVNAME"; fi ; done ;done
+  register: devices_list_raw
+
+- debug: msg="{{devices_list_raw}}"
+
+- set_fact:
+    storage_devices_lists: []
+
+- name: Создаем список дисков / партиций / серийников
+  set_fact: 
+    storage_devices_lists: "{{ storage_devices_lists + [ item[0] | combine ({ 'dev_name': item[1].split(':')[0], 'dev': item[1].split(':')[0],'part_numi': item[1].split(':')[1] ,'part_num': item[1].split(':')[2] , 'part_full_name': item[1].split(':')[6] }) ] }}"
+  with_nested: 
+    - "{{storage_devices}}"
+    - "{{devices_list_raw.stdout_lines|list}}"
+  when: 
+    - storage_devices is defined
+    - devices_list_raw is defined
+    - devices_list_raw.stdout_lines is defined
+    - item[0].serial == item[1].split(':')[4]
+
+- debug: msg="{{storage_devices_lists}}"
+
+- name: Umount All devices, and remove fstab
+  shell: umount /srv/node/ec/* >/var/log/mount_ec.log 2>&1 ; umount /srv/node/ac/* >/var/log/mount_ac.log 2>&1 ;sed -i '/\/srv\/node\//d' /etc/fstab >/var/log/clean_fstab.log 2>&1; rm -fR /srv/node/* 
+  ignore_errors: True
+
+- name: Device deleted
+  include: partitions-delete.yml 
+  with_items: "{{ storage_devices_lists }}"
+  when: storage_devices_lists is defined
+  loop_control:
+    loop_var: device_delete_item
+  tags:
+    - configure_delete
+
+- name: Find and read ALL device informations
+  shell: parted -sm -l|grep -v "BYT\|/dev/md\|^$"|grep "/dev/"|awk -F":" '{print $1, $6}'|while read DEVICENAME GPTCHK; do if [ "`echo $DEVICENAME|grep nvme|wc -l`" -eq "0" ]; then DEVICESERIAL="`smartctl -a $DEVICENAME |egrep "Serial Number:|Serial number:"|cut -d":" -f2|sed -e 's/^[ \t]*//'`"; else DEVICESERIAL="`nvme list|grep $DEVICENAME|awk '{print $2}'`"; fi; echo "$DEVICENAME:$DEVICESERIAL:`echo $GPTCHK|grep gpt|wc -l`"; done 
+  register: devices_list_raw
+
+- debug: msg="{{devices_list_raw}}"
+
+- set_fact:
+    storage_devices_lists: []
+
+- name: Создаем списко дисков - БЕЗ партиций - БЕЗ UUID
+  set_fact: 
+    storage_devices_lists: "{{ storage_devices_lists + [ item[0] | combine ({ 'dev_name': item[1].split(':')[0], 'dev': item[1].split(':')[0], 'gptchk': item[1].split(':')[2] }) ] }}"
+  with_nested: 
+    - "{{storage_devices}}"
+    - "{{devices_list_raw.stdout_lines|list}}"
+  when: 
+    - storage_devices is defined
+    - devices_list_raw is defined
+    - devices_list_raw.stdout_lines is defined
+    - item[0].serial == item[1].split(':')[1]
+
+- debug: msg="{{storage_devices_lists}}"
+
+- name: Device create
+  include: partitions-create.yml
+  with_items: "{{ storage_devices_lists }}"
+  when: storage_devices_lists is defined
+  loop_control:
+    loop_var: device_create_item
+  tags:
+    - configure_create
+
+- name: Umount All devices, and remove fstab
+  shell: umount /srv/node/ec/* >/var/log/mount_ec.log 2>&1 ; umount /srv/node/ac/* >/var/log/mount_ac.log 2>&1 ;sed -i '/\/srv\/node\//d' /etc/fstab >/var/log/clean_fstab.log 2>&1; rm -fR /srv/node/* 
+  ignore_errors: True
+
+- name: create device directories /srv/node/ac
+  file:
+    path: "/srv/node/ac"
+    owner: "swift"
+    group: "swift"
+    mode: 0750
+    state: directory
+
+- name: create device directories /srv/node/ec
+  file:
+    path: "/srv/node/ec"
+    owner: "swift"
+    group: "swift"
+    mode: 0750
+    state: directory
+
+- set_fact:
+    storage_devices_lists: []
+
+- name: Создаем списко дисков + партиций - БЕЗ UUID
+  shell: parted -sm -l|grep -v "BYT\|/dev/md\|^$"|grep "/dev/"|cut -d":" -f1|while read DEVICENAME; do parted -sm $DEVICENAME print|grep -v "BYT\|$DEVICENAME"| awk -F":" '{print $1, $6}' | while read PARTNUM PARTNAME; do if [ ${{'{'}}#PARTNAME{{'}'}} -gt "0" ]; then if [ "`echo $DEVICENAME|grep nvme|wc -l`" -eq "0" ]; then PARTPREFIX=""; DEVICESERIAL="`smartctl -a $DEVICENAME |egrep "Serial Number:|Serial number:"|cut -d":" -f2|sed -e 's/^[ \t]*//'`"; PARTDEVNAME="`echo \"$DEVICENAME\"|cut -d"/" -f3`$PARTNUM"; else PARTPREFIX="p"; DEVICESERIAL="`nvme list|grep $DEVICENAME|awk '{print $2}'`"; PARTDEVNAME="`echo \"$DEVICENAME\"|cut -d"/" -f3`p$PARTNUM"; fi; echo "$DEVICENAME:$PARTNUM:$PARTPREFIX$PARTNUM:$DEVICENAME$PARTPREFIX$PARTNUM:$DEVICESERIAL:$PARTNAME:$PARTDEVNAME";fi ; done ;done
+  register: devices_list_partitions_raw
+
+- name: Создаем список дисков / партиций / серийников
+  set_fact: 
+    storage_devices_lists: "{{ storage_devices_lists + [ item[0] | combine ({ 'dev_name': item[1].split(':')[0], 'part_numi': item[1].split(':')[1] ,'part_num': item[1].split(':')[2] , 'part_full_name': item[1].split(':')[6] }) ] }}"
+  with_nested: 
+    - "{{storage_devices}}"
+    - "{{devices_list_partitions_raw.stdout_lines|list}}"
+  when: 
+    - storage_devices is defined
+    - devices_list_partitions_raw is defined
+    - devices_list_partitions_raw.stdout_lines is defined
+    - item[0].serial == item[1].split(':')[4]
+
+- debug: msg="{{storage_devices_lists}}"
+
+- name: Create fs
+  shell: mkfs.xfs -f -i size=1024 "{{ item.dev_name }}{{ item.part_num }}"
+  with_items: "{{ storage_devices_lists }}"
+  when: storage_devices_lists is defined
+
+- name: Создаем списко дисков + UUID партиций
+  shell: parted -sm -l|grep -v "BYT\|/dev/md\|^$"|grep "/dev/"|cut -d":" -f1|while read DEVICENAME; do parted -sm $DEVICENAME print|grep -v "BYT\|$DEVICENAME"| awk -F":" '{print $1, $6}' | while read PARTNUM PARTNAME; do if [ ${{'{'}}#PARTNAME{{'}'}} -gt "0" ]; then if [ "`echo $DEVICENAME|grep nvme|wc -l`" -eq "0" ]; then PARTPREFIX=""; DEVICESERIAL="`smartctl -a $DEVICENAME |egrep "Serial Number:|Serial number:"|cut -d":" -f2|sed -e 's/^[ \t]*//'`"; PARTDEVNAME="`echo \"$DEVICENAME\"|cut -d"/" -f3`$PARTNUM"; else PARTPREFIX="p"; DEVICESERIAL="`nvme list|grep $DEVICENAME|awk '{print $2}'`"; PARTDEVNAME="`echo \"$DEVICENAME\"|cut -d"/" -f3`p$PARTNUM"; fi; blkid|grep "^$DEVICENAME$PARTPREFIX$PARTNUM"|grep " UUID=" |awk '{print $2}'|cut -d":" -f1|while read BLKID; do echo "$DEVICENAME:$PARTNUM:$PARTPREFIX$PARTNUM:$DEVICENAME$PARTPREFIX$PARTNUM:$DEVICESERIAL:$PARTNAME:$PARTDEVNAME:$BLKID"; done; fi ; done ;done
+  register: devices_list_partitions_raw
+
+- name: Создаем список дисков / партиций / серийников
+  set_fact: 
+    storage_devices_lists: "{{ storage_devices_lists + [ item[0] | combine ({ 'dev_name': item[1].split(':')[0], 'part_numi': item[1].split(':')[1] ,'part_num': item[1].split(':')[2] , 'part_full_name': item[1].split(':')[6], 'part_uuid': item[1].split(':')[7] }) ] }}"
+  with_nested: 
+    - "{{storage_devices}}"
+    - "{{devices_list_partitions_raw.stdout_lines|list}}"
+  when: 
+    - storage_devices is defined
+    - devices_list_partitions_raw is defined
+    - devices_list_partitions_raw.stdout_lines is defined
+    - item[0].serial == item[1].split(':')[4]
+
+- debug: msg="{{storage_devices_lists}}"
+
+- name: Mount 
+  include: mount.yml 
+  with_items: "{{ storage_devices_lists }}"
+  when: storage_devices_lists is defined
+  loop_control:
+    loop_var: device_mount_item
+  tags:
+    - configure_mount
+
+- name: ensure /srv/node is owned by swift
+  file:
+    path: /srv/node
+    owner: "swift"
+    group: "swift"
+    recurse: yes
+    state: directory
+

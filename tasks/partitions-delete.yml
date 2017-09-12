@@ -1,0 +1,53 @@
+#---------------------------------------------------------------------------
+# Copyright host-telecom s.r.o 2017, 2017 All Rights Reserved
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# Limitations under the License.
+#---------------------------------------------------------------------------
+# Written By Anton Porabkovich (anton@atlex.ru)
+---
+#- debug: msg="{{device_delete_item}}"
+
+#{
+#    "dev_name": "/dev/nvme0n1", 
+#    "fs": "xfs", 
+#    "mnt_name": "ac", 
+#    "part_end": "97%", 
+#    "part_full_name": "nvme0n1p1", 
+#    "part_name": "md", 
+#    "part_num": "p1", 
+#    "part_numi": "1", 
+#    "part_start": "0%", 
+#    "part_uuid": "UUID=\"451c1f98-fd69-4cc9-a6f7-f65b63e72acb\"", 
+#    "serial": "PHFT701400E5800QGN", 
+#    "weight": "100"
+#}, 
+#{
+#    "dev_name": "/dev/sdl", 
+#    "fs": "xfs", 
+#    "mnt_name": "ec", 
+#    "part_end": "98%", 
+#    "part_full_name": "sdl1", 
+#    "part_num": "1", 
+#    "part_numi": "1", 
+#    "part_start": "0%", 
+#    "part_uuid": "UUID=\"ecfd26d5-9489-4ccd-85b3-c60695b0589e\"", 
+#    "serial": "R5G7SLAV", 
+#    "weight": "80"
+#}, 
+
+- name: Размонтирование партиций, если они примонтированы ранее
+  shell: umount /srv/node/{{ device_delete_item.mnt_name }}/{{ device_delete_item.part_full_name }}{{ device_delete_item.part_num }} ; sed -i '/srv\/node\/{{ device_delete_item.mnt_name }}\/{{ device_delete_item.part_full_name }}{{ device_delete_item.part_num }}/d' /etc/fstab
+  ignore_errors: True
+
+- name:  Remove all partitions from disk 
+  shell: "parted -sm {{ device_delete_item.dev_name }} rm {{ device_delete_item.part_numi }}"
+  ignore_errors: True
